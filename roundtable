@@ -181,10 +181,12 @@ def build_system_prompt(config, seat, room, rc):
     doc_text = "".join(read_doc(p, cap) for p in rc.get("docs", []))
     brief = rc.get("brief", "")
     brief_text = f"\n\nRoom note: {brief}" if brief else ""
+    roster = ", ".join(label_for(config, s) for s in rc.get("seats", []))
+    label = label_for(config, seat)
     return (
-        f"You hold ONE seat at the '{room}' roundtable. {user_name} is in the room as "
-        f"the {user_role} and convenes it; address them directly. Speak only as your "
-        f"seat. Your charter:\n\n"
+        f"This is a meeting of {roster}, convened by {user_name} ({user_role}). "
+        f"You hold the {label} seat; speak only as yourself and address {user_name} "
+        f"directly. Your charter:\n\n"
         f"{charter_text(config, seat)}{doc_text}{workspace_note(config, rc)}{brief_text}\n\n"
         "Rules of the room:\n"
         "- Read 'Meeting so far' before answering. Other seats may have already "
