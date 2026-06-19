@@ -262,7 +262,10 @@ def cmd_say(args, config):
 def cmd_show(args, config):
     room_config(config, args.room)
     turns = load_transcript(args.room)
-    print(render_transcript(turns) if turns else f"(no meeting yet for {args.room})")
+    if not turns:
+        print(f"(no meeting yet for {args.room})")
+        return
+    print("\n\n".join(f"{speaker}: {text}" for speaker, text in turns))
 
 
 def cmd_reset(args, config):
