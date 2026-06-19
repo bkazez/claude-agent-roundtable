@@ -2,10 +2,10 @@
   "model": "sonnet",
   "user_name": "Sam",
   "user_role": "CEO",
+  "doc_char_cap": 8000,
   "seats_dir": "~/.config/roundtable/seats",
   "rooms": {
     "board": {
-      "docs": [],
       "seats": ["product", "engineering", "design", "growth", "finance"]
     },
     "launch": {
@@ -13,7 +13,8 @@
       "seats": ["product", "growth", "design"]
     },
     "nonprofit": {
-      "docs": ["~/work/foundation/MISSION.md"],
+      "cwd": "~/work/foundation",
+      "tools": ["Read", "Grep", "Glob", "Bash(gh issue list:*)", "Bash(git log:*)"],
       "seats": ["executive-director", "fundraising", "programs", "finance"]
     }
   }

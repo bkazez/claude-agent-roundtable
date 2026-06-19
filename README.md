@@ -59,15 +59,20 @@ disk, so continuity holds no matter what runs the command.
   "model": "sonnet",
   "user_name": "Sam",
   "user_role": "CEO",
+  "doc_char_cap": 8000,
   "seats_dir": "~/.config/roundtable/seats",
   "rooms": {
     "board": {
-      "docs": [],
       "seats": ["product", "engineering", "design", "growth", "finance"]
     },
     "launch": {
       "docs": ["~/work/acme/STRATEGY.md", "~/work/acme/ROADMAP.md"],
       "seats": ["product", "growth", "design"]
+    },
+    "nonprofit": {
+      "cwd": "~/work/foundation",
+      "tools": ["Read", "Grep", "Glob", "Bash(gh issue list:*)", "Bash(git log:*)"],
+      "seats": ["executive-director", "fundraising", "programs", "finance"]
     }
   }
 }
@@ -78,9 +83,46 @@ disk, so continuity holds no matter what runs the command.
   role. The transcript records your turns under `user_name`.
 - **`model`** — any Claude Code model alias or id (`sonnet`, `opus`, `haiku`, ...).
   Override per run with `ROUNDTABLE_MODEL`.
-- **`rooms`** — each room has a seat roster and an optional `docs` list. Listed
-  files are injected (read-only, truncated) into every seat's system prompt, so
-  the panel reasons about your real context.
+- **`doc_char_cap`** — per-doc truncation limit for injected `docs` (default 8000).
+- **`rooms`** — each room has a seat roster plus optional `docs`, `cwd`, and
+  `tools` (see below).
+
+## Live context: docs vs. tools
+
+A room gives its seats current context in one of two ways:
+
+- **`docs`** — a list of files injected (read-only, truncated to `doc_char_cap`)
+  into every seat's prompt. Simple and cheap; good when the context is one or two
+  small files.
+- **`cwd` + `tools`** — run the seats in a directory and grant them read-only
+  Claude Code tools, so they read the live files themselves, exactly like Claude
+  Code working in that folder. Best when context is large, spread across many
+  files, or changes between turns (you edit a file in your own session; the panel
+  sees the new version next turn). Seats are told their working directory and its
+  file listing, so they know where to look.
+
+```json
+"vmii": {
+  "cwd": "~/work/vmii",
+  "tools": ["Read", "Grep", "Glob", "Bash(gh issue list:*)"],
+  "seats": ["executive-director", "fundraising", "programs", "finance"]
+}
+```
+
+Rules of thumb:
+
+- **Keep tools read-only.** Grant `Read`, `Grep`, `Glob`, and narrowly-scoped
+  read-only `Bash(...)` patterns. Never grant `Edit`, `Write`, or mutating
+  commands. The panel *proposes* changes in its replies; you apply them in your
+  own session. That is what makes it safe to run a whole panel against your real
+  files.
+- **A room with no `tools` is pure text** (one fast model call per seat). Tools
+  make a seat mildly agentic (a few read calls per turn), so it costs more; turn
+  them on only for the rooms that need live context.
+- **Spawned seats inherit your Claude Code setup.** Because each seat is a
+  headless `claude` run, it picks up the `CLAUDE.md`, settings, and hooks that
+  apply in `cwd`. Useful (project context loads automatically), but a blocking
+  `UserPromptSubmit` hook in your config will also block seat calls.
 
 ## Add or edit seats
 

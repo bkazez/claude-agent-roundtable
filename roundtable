@@ -40,7 +40,8 @@ BUNDLED_SEATS_DIR = os.path.join(
 )
 
 DEFAULT_DOC_CHAR_CAP = 8000  # per doc, keeps cost bounded; override in config
-SEAT_TIMEOUT_S = 180
+SEAT_TIMEOUT_S = 180         # pure-text seat
+TOOL_SEAT_TIMEOUT_S = 600    # tool-enabled seat may run several read calls
 SILENT_TOKEN = "SILENT"
 
 DEFAULT_CONFIG = {
@@ -148,16 +149,37 @@ def read_doc(path, cap):
         return f"\n\n--- {os.path.basename(expanded)} ---\n{f.read()[:cap]}"
 
 
-def build_system_prompt(config, seat, room, docs):
+def workspace_note(config, rc):
+    """When a room grants read-only tools, tell seats where to look for live context."""
+    cwd = rc.get("cwd")
+    if not rc.get("tools") or not cwd:
+        return ""
+    expanded = os.path.expanduser(cwd)
+    try:
+        entries = sorted(
+            name for name in os.listdir(expanded) if not name.startswith(".")
+        )
+    except OSError:
+        entries = []
+    listing = ", ".join(entries) if entries else "(empty)"
+    return (
+        f"\n\nYou are working in {cwd}. The current context, goals, and status for "
+        f"this room live in the files here; read the relevant ones with your tools "
+        f"before answering, and do not ask {config['user_name']} for facts you can "
+        f"look up yourself. Files in this directory: {listing}."
+    )
+
+
+def build_system_prompt(config, seat, room, rc):
     user_name = config["user_name"]
     user_role = config["user_role"]
     cap = config["doc_char_cap"]
-    doc_text = "".join(read_doc(p, cap) for p in docs)
+    doc_text = "".join(read_doc(p, cap) for p in rc.get("docs", []))
     return (
         f"You hold ONE seat at the '{room}' roundtable. {user_name} is in the room as "
         f"the {user_role} and convenes it; address them directly. Speak only as your "
         f"seat. Your charter:\n\n"
-        f"{charter_text(config, seat)}{doc_text}\n\n"
+        f"{charter_text(config, seat)}{doc_text}{workspace_note(config, rc)}\n\n"
         "Rules of the room:\n"
         "- Speak only when your seat adds something the other seats would not. "
         "A meeting where everyone talks every turn is noise.\n"
@@ -168,22 +190,27 @@ def build_system_prompt(config, seat, room, docs):
     )
 
 
-def ask_seat(config, seat, room, docs, turns):
-    system_prompt = build_system_prompt(config, seat, room, docs)
+def ask_seat(config, seat, room, rc, turns):
+    tools = rc.get("tools", [])      # read-only Claude Code tools; empty = pure text
+    cwd = rc.get("cwd")              # seats read from here, like Claude Code in that dir
+    system_prompt = build_system_prompt(config, seat, room, rc)
     user_msg = (
         f"Meeting so far:\n{render_transcript(turns)}\n\n"
         f"Your turn ({label_for(config, seat)}). Reply or {SILENT_TOKEN}."
     )
+    # --allowedTools is variadic, so it goes last and the prompt is piped via stdin
+    # to keep it from being swallowed as a tool name. Empty list -> no tools allowed.
     cmd = [
         "claude", "-p",
         "--model", config["model"],
-        "--allowedTools", "",
         "--system-prompt", system_prompt,
-        user_msg,
+        "--allowedTools", *(tools or [""]),
     ]
+    timeout = TOOL_SEAT_TIMEOUT_S if tools else SEAT_TIMEOUT_S
     try:
         result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=SEAT_TIMEOUT_S
+            cmd, input=user_msg, capture_output=True, text=True,
+            timeout=timeout, cwd=os.path.expanduser(cwd) if cwd else None,
         )
     except FileNotFoundError:
         sys.exit("`claude` not found. Install Claude Code and authenticate it first.")
@@ -202,7 +229,6 @@ def ask_seat(config, seat, room, docs, turns):
 
 def cmd_say(args, config):
     rc, room_seats = room_config(config, args.room)
-    docs = rc.get("docs", [])
     woken = (
         [s.strip() for s in args.seats.split(",") if s.strip()]
         if args.seats else room_seats
@@ -215,7 +241,7 @@ def cmd_say(args, config):
     spoken, errors = {}, {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(woken)) as ex:
         futures = [
-            ex.submit(ask_seat, config, seat, args.room, docs, turns)
+            ex.submit(ask_seat, config, seat, args.room, rc, turns)
             for seat in woken
         ]
         for fut in concurrent.futures.as_completed(futures):
