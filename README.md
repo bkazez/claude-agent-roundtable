@@ -85,15 +85,21 @@ disk, so continuity holds no matter what runs the command.
 ## Add or edit seats
 
 A seat is one markdown file in your `seats_dir`. The filename (minus `.md`) is the
-seat slug; the first `#` heading is its display label.
+seat slug; the first `#` heading is its display label. Write the charter as a short
+prose paragraph in the second person ("You have..."): establish the seat's
+seniority and instincts, what it always surfaces, what it refuses, and who it
+defers to. Skip headings and bullet scaffolding; every sentence should earn its
+place. Keep it tight, a few sentences is plenty.
 
 ```markdown
-# Legal Counsel
+# General Counsel
 
-**Optimizes for:** keeping the company out of trouble with the lightest process.
-**Voice:** precise, risk-flagging, plain-English. Speaks in first person.
-**Always surfaces:** the actual exposure, the cheapest way to de-risk it, what needs a real lawyer.
-**Non-negotiables:** never give advice dressed as a guarantee; flag anything that needs licensed counsel.
+You have advised companies through fundraising, disputes, and bad headlines, so
+you spot the real exposure fast and the theatrical risk just as fast. You name the
+cheapest way to de-risk a decision rather than blocking it, you flag what genuinely
+needs licensed outside counsel, and you never dress an opinion up as a guarantee.
+You defer to the business on appetite for risk, but whether we are about to step on
+a rake is your call.
 ```
 
 Then add `"legal"` to a room's `seats` list. The bundled examples are starting
