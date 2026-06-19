@@ -1,0 +1,332 @@
+#!/usr/bin/env python3
+"""roundtable: chat with a panel of persistent AI advisor "seats" from your terminal.
+
+Each seat is a charter (a markdown system prompt) in your seats directory. A per-room
+transcript on disk is the shared memory, so seats remember the meeting across separate
+invocations. Each turn, the woken seats answer in parallel via headless `claude -p`
+(your Claude Code auth, no API key), and any seat may stay silent.
+
+Quickstart:
+  roundtable init                       # scaffold config + example seats
+  roundtable say board "Should we raise prices 10%?"
+  roundtable say board --seats finance,growth "Draft the announcement"
+  roundtable show board
+  roundtable reset board
+  roundtable rooms
+
+Config lives at $ROUNDTABLE_CONFIG or ~/.config/roundtable/config.json.
+Transcripts live under ~/.local/state/roundtable/.
+"""
+import argparse
+import concurrent.futures
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+
+
+def xdg(env, default):
+    return os.environ.get(env) or os.path.expanduser(default)
+
+
+CONFIG_PATH = os.environ.get("ROUNDTABLE_CONFIG") or os.path.join(
+    xdg("XDG_CONFIG_HOME", "~/.config"), "roundtable", "config.json"
+)
+STATE_DIR = os.path.join(xdg("XDG_STATE_HOME", "~/.local/state"), "roundtable")
+BUNDLED_SEATS_DIR = os.path.join(
+    os.path.dirname(os.path.realpath(__file__)), "seats"
+)
+
+DOC_CHAR_CAP = 8000          # per doc, keeps cost bounded
+SEAT_TIMEOUT_S = 180
+SILENT_TOKEN = "SILENT"
+
+DEFAULT_CONFIG = {
+    "model": "sonnet",
+    "user_name": "You",
+    "user_role": "convener",
+    "seats_dir": os.path.join(xdg("XDG_CONFIG_HOME", "~/.config"), "roundtable", "seats"),
+    "rooms": {
+        "board": {
+            "docs": [],
+            "seats": ["product", "engineering", "design", "growth", "finance"],
+        }
+    },
+}
+
+
+def load_config():
+    if not os.path.exists(CONFIG_PATH):
+        sys.exit(
+            f"no config at {CONFIG_PATH}. Run `roundtable init` to scaffold one."
+        )
+    with open(CONFIG_PATH) as f:
+        config = json.load(f)
+    config.setdefault("model", DEFAULT_CONFIG["model"])
+    config.setdefault("user_name", DEFAULT_CONFIG["user_name"])
+    config.setdefault("user_role", DEFAULT_CONFIG["user_role"])
+    config.setdefault("seats_dir", DEFAULT_CONFIG["seats_dir"])
+    config.setdefault("rooms", {})
+    if "ROUNDTABLE_MODEL" in os.environ:
+        config["model"] = os.environ["ROUNDTABLE_MODEL"]
+    return config
+
+
+def room_config(config, room):
+    rooms = config["rooms"]
+    if room not in rooms:
+        known = ", ".join(sorted(rooms)) or "(none defined)"
+        sys.exit(f"unknown room '{room}'. Known: {known}")
+    rc = rooms[room]
+    seats = rc.get("seats", [])
+    if not seats:
+        sys.exit(f"room '{room}' has no seats configured")
+    return rc, seats
+
+
+# --- charters / labels ------------------------------------------------------
+
+def seats_dir(config):
+    return os.path.expanduser(config["seats_dir"])
+
+
+def charter_path(config, seat):
+    return os.path.join(seats_dir(config), f"{seat}.md")
+
+
+def charter_text(config, seat):
+    path = charter_path(config, seat)
+    if not os.path.exists(path):
+        sys.exit(f"no charter for seat '{seat}' at {path}")
+    with open(path) as f:
+        return f.read()
+
+
+def label_for(config, seat):
+    """Display label = the charter's first markdown heading, else the slug."""
+    text = charter_text(config, seat)
+    match = re.search(r"^#\s+(.+)$", text, re.MULTILINE)
+    return match.group(1).strip() if match else seat.replace("-", " ").title()
+
+
+# --- transcript -------------------------------------------------------------
+
+def transcript_path(room):
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", room)
+    return os.path.join(STATE_DIR, f"{safe}.json")
+
+
+def load_transcript(room):
+    path = transcript_path(room)
+    if not os.path.exists(path):
+        return []
+    with open(path) as f:
+        return json.load(f)
+
+
+def save_transcript(room, turns):
+    os.makedirs(STATE_DIR, exist_ok=True)
+    with open(transcript_path(room), "w") as f:
+        json.dump(turns, f, indent=2)
+
+
+def render_transcript(turns):
+    return "\n".join(f"{speaker}: {text}" for speaker, text in turns)
+
+
+# --- the meeting ------------------------------------------------------------
+
+def read_doc(path):
+    expanded = os.path.expanduser(path)
+    if not os.path.exists(expanded):
+        return f"\n\n--- {path} (not found) ---"
+    with open(expanded) as f:
+        return f"\n\n--- {os.path.basename(expanded)} ---\n{f.read()[:DOC_CHAR_CAP]}"
+
+
+def build_system_prompt(config, seat, room, docs):
+    user_name = config["user_name"]
+    user_role = config["user_role"]
+    doc_text = "".join(read_doc(p) for p in docs)
+    return (
+        f"You hold ONE seat at the '{room}' roundtable. {user_name} is in the room as "
+        f"the {user_role} and convenes it; address them directly. Speak only as your "
+        f"seat. Your charter:\n\n"
+        f"{charter_text(config, seat)}{doc_text}\n\n"
+        "Rules of the room:\n"
+        "- Speak only when your seat adds something the other seats would not. "
+        "A meeting where everyone talks every turn is noise.\n"
+        f"- If you have nothing distinctive to add this turn, reply with EXACTLY: {SILENT_TOKEN}\n"
+        "- Otherwise: 1-3 sentences, first person, no preamble, no emoji. "
+        "Your entire reply is shown verbatim in the meeting transcript, so do not "
+        "include reasoning or stage directions."
+    )
+
+
+def ask_seat(config, seat, room, docs, turns):
+    system_prompt = build_system_prompt(config, seat, room, docs)
+    user_msg = (
+        f"Meeting so far:\n{render_transcript(turns)}\n\n"
+        f"Your turn ({label_for(config, seat)}). Reply or {SILENT_TOKEN}."
+    )
+    cmd = [
+        "claude", "-p",
+        "--model", config["model"],
+        "--allowedTools", "",
+        "--system-prompt", system_prompt,
+        user_msg,
+    ]
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=SEAT_TIMEOUT_S
+        )
+    except FileNotFoundError:
+        sys.exit("`claude` not found. Install Claude Code and authenticate it first.")
+    except subprocess.TimeoutExpired:
+        return seat, None, "timeout"
+    if result.returncode != 0:
+        return seat, None, (result.stderr or "claude error").strip()
+    reply = result.stdout.strip()
+    normalized = reply.upper().strip(" .!\"'")
+    if not reply or normalized == SILENT_TOKEN:
+        return seat, None, None
+    return seat, reply, None
+
+
+# --- commands ---------------------------------------------------------------
+
+def cmd_say(args, config):
+    rc, room_seats = room_config(config, args.room)
+    docs = rc.get("docs", [])
+    woken = (
+        [s.strip() for s in args.seats.split(",") if s.strip()]
+        if args.seats else room_seats
+    )
+
+    turns = load_transcript(args.room)
+    turns.append([config["user_name"], args.message])
+
+    # Seats answer the same transcript in parallel; they react to each other next turn.
+    spoken, errors = {}, {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(woken)) as ex:
+        futures = [
+            ex.submit(ask_seat, config, seat, args.room, docs, turns)
+            for seat in woken
+        ]
+        for fut in concurrent.futures.as_completed(futures):
+            seat, reply, err = fut.result()
+            if err:
+                errors[seat] = err
+            elif reply:
+                spoken[seat] = reply
+
+    for seat in woken:  # stable display order
+        if seat in spoken:
+            label = label_for(config, seat)
+            turns.append([label, spoken[seat]])
+            print(f"{label}: {spoken[seat]}\n")
+
+    save_transcript(args.room, turns)
+
+    silent = [label_for(config, s) for s in woken if s not in spoken and s not in errors]
+    if silent:
+        print(f"(silent: {', '.join(silent)})")
+    for seat, err in errors.items():
+        print(f"(error from {label_for(config, seat)}: {err})", file=sys.stderr)
+
+
+def cmd_show(args, config):
+    room_config(config, args.room)
+    turns = load_transcript(args.room)
+    print(render_transcript(turns) if turns else f"(no meeting yet for {args.room})")
+
+
+def cmd_reset(args, config):
+    room_config(config, args.room)
+    path = transcript_path(args.room)
+    if os.path.exists(path):
+        os.remove(path)
+    print(f"reset {args.room}")
+
+
+def cmd_seats(args, config):
+    _, seats = room_config(config, args.room)
+    for seat in seats:
+        print(f"{seat:16} {label_for(config, seat)}")
+
+
+def cmd_rooms(args, config):
+    for name, rc in sorted(config["rooms"].items()):
+        seats = ", ".join(rc.get("seats", []))
+        print(f"{name:16} seats: {seats}")
+
+
+def cmd_init(args, config_unused):
+    os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
+    target_seats = os.path.expanduser(DEFAULT_CONFIG["seats_dir"])
+    os.makedirs(target_seats, exist_ok=True)
+
+    copied = []
+    if os.path.isdir(BUNDLED_SEATS_DIR):
+        for name in sorted(os.listdir(BUNDLED_SEATS_DIR)):
+            if name.endswith(".md"):
+                dst = os.path.join(target_seats, name)
+                if not os.path.exists(dst) or args.force:
+                    shutil.copy(os.path.join(BUNDLED_SEATS_DIR, name), dst)
+                    copied.append(name)
+
+    if os.path.exists(CONFIG_PATH) and not args.force:
+        print(f"config already exists at {CONFIG_PATH} (use --force to overwrite)")
+    else:
+        with open(CONFIG_PATH, "w") as f:
+            json.dump(DEFAULT_CONFIG, f, indent=2)
+        print(f"wrote config to {CONFIG_PATH}")
+
+    print(f"seats dir: {target_seats}" + (f" (copied {len(copied)})" if copied else ""))
+    print("next: roundtable say board \"your first question\"")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Chat with a panel of persistent AI advisor seats.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p_say = sub.add_parser("say", help="send a message to a room")
+    p_say.add_argument("room")
+    p_say.add_argument("message")
+    p_say.add_argument("--seats", help="comma-separated seats to wake (default: all)")
+    p_say.set_defaults(func=cmd_say)
+
+    p_show = sub.add_parser("show", help="print a room's transcript")
+    p_show.add_argument("room")
+    p_show.set_defaults(func=cmd_show)
+
+    p_reset = sub.add_parser("reset", help="clear a room's transcript")
+    p_reset.add_argument("room")
+    p_reset.set_defaults(func=cmd_reset)
+
+    p_seats = sub.add_parser("seats", help="list a room's seats")
+    p_seats.add_argument("room")
+    p_seats.set_defaults(func=cmd_seats)
+
+    p_rooms = sub.add_parser("rooms", help="list configured rooms")
+    p_rooms.set_defaults(func=cmd_rooms)
+
+    p_init = sub.add_parser("init", help="scaffold config + example seats")
+    p_init.add_argument("--force", action="store_true", help="overwrite existing files")
+    p_init.set_defaults(func=cmd_init)
+
+    args = parser.parse_args()
+    if args.command == "init":
+        args.func(args, None)
+    else:
+        args.func(args, load_config())
+
+
+if __name__ == "__main__":
+    main()

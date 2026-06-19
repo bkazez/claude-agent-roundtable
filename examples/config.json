@@ -1,0 +1,16 @@
+{
+  "model": "sonnet",
+  "user_name": "Sam",
+  "user_role": "CEO",
+  "seats_dir": "~/.config/roundtable/seats",
+  "rooms": {
+    "board": {
+      "docs": [],
+      "seats": ["product", "engineering", "design", "growth", "finance"]
+    },
+    "launch": {
+      "docs": ["~/work/acme/STRATEGY.md", "~/work/acme/ROADMAP.md"],
+      "seats": ["product", "growth", "design"]
+    }
+  }
+}
