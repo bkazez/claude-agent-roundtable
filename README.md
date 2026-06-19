@@ -4,8 +4,9 @@ Chat with a panel of persistent AI advisor "seats" from your terminal.
 
 Each seat is a charter (a short markdown system prompt). A per-room transcript on
 disk is the shared memory, so the seats remember the meeting across separate
-commands. Every turn, the seats you wake answer **in parallel**, react to each
-other, and **any seat may stay silent** instead of padding the conversation.
+commands. Every turn, the seats you wake answer **in order**, each one seeing the
+earlier replies from the same round (a real discussion, not parallel monologues),
+and **any seat may stay silent** instead of padding the conversation.
 
 No API key. Each seat answers through headless `claude -p`, reusing your existing
 Claude Code authentication.

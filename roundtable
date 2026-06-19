@@ -18,7 +18,6 @@ Config lives at $ROUNDTABLE_CONFIG or ~/.config/roundtable/config.json.
 Transcripts live under ~/.local/state/roundtable/.
 """
 import argparse
-import concurrent.futures
 import json
 import os
 import re
@@ -237,29 +236,23 @@ def cmd_say(args, config):
     turns = load_transcript(args.room)
     turns.append([config["user_name"], args.message])
 
-    # Seats answer the same transcript in parallel; they react to each other next turn.
-    spoken, errors = {}, {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=len(woken)) as ex:
-        futures = [
-            ex.submit(ask_seat, config, seat, args.room, rc, turns)
-            for seat in woken
-        ]
-        for fut in concurrent.futures.as_completed(futures):
-            seat, reply, err = fut.result()
-            if err:
-                errors[seat] = err
-            elif reply:
-                spoken[seat] = reply
-
-    for seat in woken:  # stable display order
-        if seat in spoken:
-            label = label_for(config, seat)
-            turns.append([label, spoken[seat]])
-            print(f"{label}: {spoken[seat]}\n")
+    # Seats speak in order; each one sees the earlier seats' replies from this same
+    # round, since a reply is appended to the transcript before the next seat runs.
+    # This makes a round a real discussion rather than parallel monologues.
+    silent, errors = [], {}
+    for seat in woken:
+        _, reply, err = ask_seat(config, seat, args.room, rc, turns)
+        label = label_for(config, seat)
+        if err:
+            errors[seat] = err
+        elif reply:
+            turns.append([label, reply])
+            print(f"{label}: {reply}\n")
+        else:
+            silent.append(label)
 
     save_transcript(args.room, turns)
 
-    silent = [label_for(config, s) for s in woken if s not in spoken and s not in errors]
     if silent:
         print(f"(silent: {', '.join(silent)})")
     for seat, err in errors.items():
