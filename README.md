@@ -42,11 +42,17 @@ charters into `~/.config/roundtable/seats/`.
 ```
 roundtable say board "your question"                 # wake every seat in the room
 roundtable say board --seats finance,growth "..."    # wake specific seats
+roundtable continue board                            # seats keep talking; you stay silent
+roundtable continue board --rounds 3                 # up to 3 self-driven rounds
 roundtable show board                                # print the transcript
 roundtable reset board                               # start the meeting over
 roundtable rooms                                     # list configured rooms
 roundtable seats board                               # list a room's seats
 ```
+
+`continue` runs rounds with no message from you, so the seats carry the discussion
+themselves, each reacting to what was last said. It stops early once a full round
+goes silent (nothing left to add). Use it when you want to listen rather than steer.
 
 Drive it from a Claude Code session, a shell script, or by hand. State lives on
 disk, so continuity holds no matter what runs the command.

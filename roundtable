@@ -226,37 +226,62 @@ def ask_seat(config, seat, room, rc, turns):
 
 # --- commands ---------------------------------------------------------------
 
-def cmd_say(args, config):
-    rc, room_seats = room_config(config, args.room)
-    woken = (
+def woken_seats(args, room_seats):
+    return (
         [s.strip() for s in args.seats.split(",") if s.strip()]
-        if args.seats else room_seats
+        if getattr(args, "seats", None) else room_seats
     )
 
-    turns = load_transcript(args.room)
-    turns.append([config["user_name"], args.message])
 
-    # Seats speak in order; each one sees the earlier seats' replies from this same
-    # round, since a reply is appended to the transcript before the next seat runs.
-    # This makes a round a real discussion rather than parallel monologues.
+def run_round(config, room, rc, woken, turns):
+    """One sequential pass: each seat speaks seeing the earlier replies from this
+    round (its reply is appended before the next seat runs). Mutates turns and
+    prints; returns how many seats spoke."""
+    spoke = 0
     silent, errors = [], {}
     for seat in woken:
-        _, reply, err = ask_seat(config, seat, args.room, rc, turns)
+        _, reply, err = ask_seat(config, seat, room, rc, turns)
         label = label_for(config, seat)
         if err:
             errors[seat] = err
         elif reply:
             turns.append([label, reply])
             print(f"{label}: {reply}\n")
+            spoke += 1
         else:
             silent.append(label)
-
-    save_transcript(args.room, turns)
-
     if silent:
         print(f"(silent: {', '.join(silent)})")
     for seat, err in errors.items():
         print(f"(error from {label_for(config, seat)}: {err})", file=sys.stderr)
+    return spoke
+
+
+def cmd_say(args, config):
+    rc, room_seats = room_config(config, args.room)
+    woken = woken_seats(args, room_seats)
+    turns = load_transcript(args.room)
+    turns.append([config["user_name"], args.message])
+    run_round(config, args.room, rc, woken, turns)
+    save_transcript(args.room, turns)
+
+
+def cmd_continue(args, config):
+    """Run rounds with NO human turn: the seats carry the discussion themselves,
+    each reacting to what was last said. Stops early once a full round is silent."""
+    rc, room_seats = room_config(config, args.room)
+    woken = woken_seats(args, room_seats)
+    turns = load_transcript(args.room)
+    if not turns:
+        sys.exit(f"no meeting yet for {args.room}; start one with `roundtable say`.")
+    for i in range(args.rounds):
+        if args.rounds > 1:
+            print(f"-- round {i + 1} --\n")
+        spoke = run_round(config, args.room, rc, woken, turns)
+        save_transcript(args.room, turns)
+        if not spoke:
+            print("(the room went silent; nothing left to add)")
+            break
 
 
 def cmd_show(args, config):
@@ -326,6 +351,14 @@ def main():
     p_say.add_argument("message")
     p_say.add_argument("--seats", help="comma-separated seats to wake (default: all)")
     p_say.set_defaults(func=cmd_say)
+
+    p_continue = sub.add_parser(
+        "continue", help="let the seats keep talking with no message from you")
+    p_continue.add_argument("room")
+    p_continue.add_argument("--rounds", type=int, default=1,
+                            help="max rounds to run (stops early if all go silent)")
+    p_continue.add_argument("--seats", help="comma-separated seats to wake (default: all)")
+    p_continue.set_defaults(func=cmd_continue)
 
     p_show = sub.add_parser("show", help="print a room's transcript")
     p_show.add_argument("room")
