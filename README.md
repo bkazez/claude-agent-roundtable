@@ -12,10 +12,10 @@ Claude Code authentication.
 
 ```
 $ roundtable say board "Should we raise prices 10%?"
-Finance Lead: Only if churn elasticity tests under 5% loss; run a cohort price test on one segment first.
-Growth Lead: Lead with added value, not the increase; grandfather existing customers for 60 days to blunt churn.
+Chief Financial Officer: Only if churn elasticity tests under 5% loss; run a cohort price test on one segment first.
+Chief Marketing Officer: Lead with added value, not the increase; grandfather existing customers for 60 days to blunt churn.
 
-(silent: Head of Product, Engineering Lead, Design Lead)
+(silent: Chief Product Officer, VP of Engineering, Head of Design)
 ```
 
 ## Requirements
