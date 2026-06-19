@@ -284,6 +284,32 @@ def cmd_continue(args, config):
             break
 
 
+def cmd_chat(args, config):
+    """Interactive chatroom: type to speak, press Enter alone to stay silent and
+    let the seats continue, Ctrl-D or 'exit' to leave."""
+    rc, room_seats = room_config(config, args.room)
+    woken = woken_seats(args, room_seats)
+    turns = load_transcript(args.room)
+    name = config["user_name"]
+    print(
+        f"roundtable: {args.room} - {len(woken)} seats. Type to speak; press Enter "
+        f"alone to stay silent and let them continue; Ctrl-D or 'exit' to leave.\n"
+    )
+    while True:
+        try:
+            msg = input(f"{name}: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+        if msg in ("exit", "quit"):
+            break
+        if msg:
+            turns.append([name, msg])
+        print()
+        run_round(config, args.room, rc, woken, turns)
+        save_transcript(args.room, turns)
+
+
 def cmd_show(args, config):
     room_config(config, args.room)
     turns = load_transcript(args.room)
@@ -359,6 +385,12 @@ def main():
                             help="max rounds to run (stops early if all go silent)")
     p_continue.add_argument("--seats", help="comma-separated seats to wake (default: all)")
     p_continue.set_defaults(func=cmd_continue)
+
+    p_chat = sub.add_parser(
+        "chat", help="interactive chatroom; press Enter alone to stay silent")
+    p_chat.add_argument("room")
+    p_chat.add_argument("--seats", help="comma-separated seats to wake (default: all)")
+    p_chat.set_defaults(func=cmd_chat)
 
     p_show = sub.add_parser("show", help="print a room's transcript")
     p_show.add_argument("room")
