@@ -169,9 +169,14 @@ def workspace_note(config, rc):
     )
 
 
+def user_identity(config, rc):
+    """Who the human is in this room (room may override the global name/role)."""
+    return (rc.get("user_name", config["user_name"]),
+            rc.get("user_role", config["user_role"]))
+
+
 def build_system_prompt(config, seat, room, rc):
-    user_name = config["user_name"]
-    user_role = config["user_role"]
+    user_name, user_role = user_identity(config, rc)
     cap = config["doc_char_cap"]
     doc_text = "".join(read_doc(p, cap) for p in rc.get("docs", []))
     return (
@@ -192,19 +197,58 @@ def build_system_prompt(config, seat, room, rc):
     )
 
 
+def grey(text):
+    return f"\033[90m{text}\033[0m" if sys.stdout.isatty() else text
+
+
+def tool_brief(name, tool_input):
+    """A short, readable summary of a tool call's most relevant argument."""
+    if not isinstance(tool_input, dict):
+        return ""
+    val = (tool_input.get("command") or tool_input.get("file_path")
+           or tool_input.get("pattern") or tool_input.get("query")
+           or tool_input.get("path") or "")
+    val = " ".join(str(val).split())
+    return f"{val[:60]}…" if len(val) > 60 else val
+
+
+def parse_stream(stdout, label):
+    """Print a grey line for each tool call a seat makes; return its final text."""
+    final = ""
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("type") == "assistant":
+            for block in event.get("message", {}).get("content", []):
+                if block.get("type") == "tool_use":
+                    name = block.get("name", "")
+                    brief = tool_brief(name, block.get("input", {}))
+                    print(grey(f"  · {label}: {name} {brief}".rstrip()))
+        elif event.get("type") == "result":
+            final = event.get("result") or ""
+    return final
+
+
 def ask_seat(config, seat, room, rc, turns):
     tools = rc.get("tools", [])      # read-only Claude Code tools; empty = pure text
     cwd = rc.get("cwd")              # seats read from here, like Claude Code in that dir
+    label = label_for(config, seat)
     system_prompt = build_system_prompt(config, seat, room, rc)
     user_msg = (
         f"Meeting so far:\n{render_transcript(turns)}\n\n"
-        f"Your turn ({label_for(config, seat)}). Reply or {SILENT_TOKEN}."
+        f"Your turn ({label}). Reply or {SILENT_TOKEN}."
     )
+    # stream-json (which requires --verbose) lets us surface each seat's tool calls.
     # --allowedTools is variadic, so it goes last and the prompt is piped via stdin
     # to keep it from being swallowed as a tool name. Empty list -> no tools allowed.
     cmd = [
-        "claude", "-p",
-        "--model", config["model"],
+        "claude", "-p", "--output-format", "stream-json", "--verbose",
+        "--model", rc.get("model", config["model"]),
         "--system-prompt", system_prompt,
         "--allowedTools", *(tools or [""]),
     ]
@@ -220,7 +264,7 @@ def ask_seat(config, seat, room, rc, turns):
         return seat, None, "timeout"
     if result.returncode != 0:
         return seat, None, (result.stderr or "claude error").strip()
-    reply = result.stdout.strip()
+    reply = parse_stream(result.stdout, label).strip()
     normalized = reply.upper().strip(" .!\"'")
     if not reply or normalized == SILENT_TOKEN:
         return seat, None, None
@@ -263,8 +307,9 @@ def run_round(config, room, rc, woken, turns):
 def cmd_say(args, config):
     rc, room_seats = room_config(config, args.room)
     woken = woken_seats(args, room_seats)
+    name, _ = user_identity(config, rc)
     turns = load_transcript(args.room)
-    turns.append([config["user_name"], args.message])
+    turns.append([name, args.message])
     run_round(config, args.room, rc, woken, turns)
     save_transcript(args.room, turns)
 
@@ -293,7 +338,7 @@ def cmd_chat(args, config):
     rc, room_seats = room_config(config, args.room)
     woken = woken_seats(args, room_seats)
     turns = load_transcript(args.room)
-    name = config["user_name"]
+    name, _ = user_identity(config, rc)
     print(
         f"roundtable: {args.room} - {len(woken)} seats. Type to speak; press Enter "
         f"alone to stay silent and let them continue; Ctrl-D or 'exit' to leave.\n"
