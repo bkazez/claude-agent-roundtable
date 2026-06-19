@@ -96,8 +96,10 @@ seat slug; the first `#` heading is its display label.
 **Non-negotiables:** never give advice dressed as a guarantee; flag anything that needs licensed counsel.
 ```
 
-Then add `"legal"` to a room's `seats` list. The bundled examples (product,
-engineering, design, growth, finance) are starting points; rewrite them freely.
+Then add `"legal"` to a room's `seats` list. The bundled examples are starting
+points; rewrite them freely. They cover a startup panel (product, engineering,
+design, growth, finance) and a nonprofit panel (executive-director, fundraising,
+programs, plus finance).
 
 ## How it works (and what it costs)
 

@@ -11,6 +11,10 @@
     "launch": {
       "docs": ["~/work/acme/STRATEGY.md", "~/work/acme/ROADMAP.md"],
       "seats": ["product", "growth", "design"]
+    },
+    "nonprofit": {
+      "docs": ["~/work/foundation/MISSION.md"],
+      "seats": ["executive-director", "fundraising", "programs", "finance"]
     }
   }
 }
