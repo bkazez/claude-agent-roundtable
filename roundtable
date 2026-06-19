@@ -34,9 +34,10 @@ CONFIG_PATH = os.environ.get("ROUNDTABLE_CONFIG") or os.path.join(
     xdg("XDG_CONFIG_HOME", "~/.config"), "roundtable", "config.json"
 )
 STATE_DIR = os.path.join(xdg("XDG_STATE_HOME", "~/.local/state"), "roundtable")
-BUNDLED_SEATS_DIR = os.path.join(
-    os.path.dirname(os.path.realpath(__file__)), "seats"
-)
+SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
+BUNDLED_SEATS_DIR = os.path.join(SCRIPT_DIR, "seats")
+ROOM_TEMPLATE_NAME = "ROOM.md"           # editable system-prompt template
+BUNDLED_ROOM_TEMPLATE = os.path.join(SCRIPT_DIR, ROOM_TEMPLATE_NAME)
 
 DEFAULT_DOC_CHAR_CAP = 8000  # per doc, keeps cost bounded; override in config
 SEAT_TIMEOUT_S = 180         # pure-text seat
@@ -175,34 +176,51 @@ def user_identity(config, rc):
             rc.get("user_role", config["user_role"]))
 
 
+def room_template(config):
+    """The system-prompt template. A ROOM.md in the seats dir overrides the bundled one."""
+    override = os.path.join(seats_dir(config), ROOM_TEMPLATE_NAME)
+    path = override if os.path.exists(override) else BUNDLED_ROOM_TEMPLATE
+    with open(path) as f:
+        return f.read()
+
+
 def build_system_prompt(config, seat, room, rc):
     user_name, user_role = user_identity(config, rc)
     cap = config["doc_char_cap"]
     doc_text = "".join(read_doc(p, cap) for p in rc.get("docs", []))
     brief = rc.get("brief", "")
-    brief_text = f"\n\nRoom note: {brief}" if brief else ""
-    roster = ", ".join(label_for(config, s) for s in rc.get("seats", []))
-    label = label_for(config, seat)
-    return (
-        f"This is a meeting of {roster}, convened by {user_name} ({user_role}). "
-        f"You hold the {label} seat; speak only as yourself and address {user_name} "
-        f"directly. Your charter:\n\n"
-        f"{charter_text(config, seat)}{doc_text}{workspace_note(config, rc)}{brief_text}\n\n"
-        "Rules of the room:\n"
-        "- Read 'Meeting so far' before answering. Other seats may have already "
-        "spoken this round; engage with what they actually said, build on it or "
-        "push back on it by name, and never just restate a point already on the table.\n"
-        "- Silence is the default. If your distinctive point is already covered, or "
-        "you would only echo or lightly reword what someone said, reply with EXACTLY: "
-        f"{SILENT_TOKEN}. Speak only when your seat adds something genuinely new.\n"
-        "- When you do speak: 1-3 sentences, first person, no preamble, no emoji. "
-        "Your entire reply is shown verbatim in the meeting transcript, so do not "
-        "include reasoning or stage directions."
-    )
+    fields = {
+        "roster": ", ".join(label_for(config, s) for s in rc.get("seats", [])),
+        "user_name": user_name,
+        "user_role": user_role,
+        "label": label_for(config, seat),
+        "charter": charter_text(config, seat),
+        "docs": doc_text,
+        "workspace": workspace_note(config, rc),
+        "brief": f"\n\nRoom note: {brief}" if brief else "",
+    }
+    # str.replace, not str.format, so braces in charters/docs are not parsed as fields.
+    prompt = room_template(config)
+    for key, value in fields.items():
+        prompt = prompt.replace("{" + key + "}", value)
+    return prompt.strip()
+
+
+ANSI_GREY = "\033[90m"
+ANSI_UNDERLINE = "\033[4m"
+ANSI_RESET = "\033[0m"
+SPEAKER_MARK = "⏺"
 
 
 def grey(text):
-    return f"\033[90m{text}\033[0m" if sys.stdout.isatty() else text
+    return f"{ANSI_GREY}{text}{ANSI_RESET}" if sys.stdout.isatty() else text
+
+
+def speaker_label(name):
+    """Transcript header for one speaker: '⏺ Name', name underlined on a TTY."""
+    if sys.stdout.isatty():
+        return f"{SPEAKER_MARK} {ANSI_UNDERLINE}{name}{ANSI_RESET}"
+    return f"{SPEAKER_MARK} {name}"
 
 
 def tool_brief(name, tool_input):
@@ -297,7 +315,7 @@ def run_round(config, room, rc, woken, turns):
             errors[seat] = err
         elif reply:
             turns.append([label, reply])
-            print(f"{label}: {reply}\n")
+            print(f"{speaker_label(label)}: {reply}\n")
             spoke += 1
         else:
             silent.append(label)
@@ -368,7 +386,7 @@ def cmd_show(args, config):
     if not turns:
         print(f"(no meeting yet for {args.room})")
         return
-    print("\n\n".join(f"{speaker}: {text}" for speaker, text in turns))
+    print("\n\n".join(f"{speaker_label(speaker)}: {text}" for speaker, text in turns))
 
 
 def cmd_reset(args, config):
@@ -404,6 +422,11 @@ def cmd_init(args, config_unused):
                 if not os.path.exists(dst) or args.force:
                     shutil.copy(os.path.join(BUNDLED_SEATS_DIR, name), dst)
                     copied.append(name)
+
+    room_dst = os.path.join(target_seats, ROOM_TEMPLATE_NAME)
+    if not os.path.exists(room_dst) or args.force:
+        shutil.copy(BUNDLED_ROOM_TEMPLATE, room_dst)
+        copied.append(ROOM_TEMPLATE_NAME)
 
     if os.path.exists(CONFIG_PATH) and not args.force:
         print(f"config already exists at {CONFIG_PATH} (use --force to overwrite)")
