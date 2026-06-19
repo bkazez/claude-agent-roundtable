@@ -39,7 +39,7 @@ BUNDLED_SEATS_DIR = os.path.join(
     os.path.dirname(os.path.realpath(__file__)), "seats"
 )
 
-DOC_CHAR_CAP = 8000          # per doc, keeps cost bounded
+DEFAULT_DOC_CHAR_CAP = 8000  # per doc, keeps cost bounded; override in config
 SEAT_TIMEOUT_S = 180
 SILENT_TOKEN = "SILENT"
 
@@ -47,6 +47,7 @@ DEFAULT_CONFIG = {
     "model": "sonnet",
     "user_name": "You",
     "user_role": "convener",
+    "doc_char_cap": DEFAULT_DOC_CHAR_CAP,
     "seats_dir": os.path.join(xdg("XDG_CONFIG_HOME", "~/.config"), "roundtable", "seats"),
     "rooms": {
         "board": {
@@ -67,6 +68,7 @@ def load_config():
     config.setdefault("model", DEFAULT_CONFIG["model"])
     config.setdefault("user_name", DEFAULT_CONFIG["user_name"])
     config.setdefault("user_role", DEFAULT_CONFIG["user_role"])
+    config.setdefault("doc_char_cap", DEFAULT_CONFIG["doc_char_cap"])
     config.setdefault("seats_dir", DEFAULT_CONFIG["seats_dir"])
     config.setdefault("rooms", {})
     if "ROUNDTABLE_MODEL" in os.environ:
@@ -138,18 +140,19 @@ def render_transcript(turns):
 
 # --- the meeting ------------------------------------------------------------
 
-def read_doc(path):
+def read_doc(path, cap):
     expanded = os.path.expanduser(path)
     if not os.path.exists(expanded):
         return f"\n\n--- {path} (not found) ---"
     with open(expanded) as f:
-        return f"\n\n--- {os.path.basename(expanded)} ---\n{f.read()[:DOC_CHAR_CAP]}"
+        return f"\n\n--- {os.path.basename(expanded)} ---\n{f.read()[:cap]}"
 
 
 def build_system_prompt(config, seat, room, docs):
     user_name = config["user_name"]
     user_role = config["user_role"]
-    doc_text = "".join(read_doc(p) for p in docs)
+    cap = config["doc_char_cap"]
+    doc_text = "".join(read_doc(p, cap) for p in docs)
     return (
         f"You hold ONE seat at the '{room}' roundtable. {user_name} is in the room as "
         f"the {user_role} and convenes it; address them directly. Speak only as your "
