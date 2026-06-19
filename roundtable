@@ -179,11 +179,13 @@ def build_system_prompt(config, seat, room, rc):
     user_name, user_role = user_identity(config, rc)
     cap = config["doc_char_cap"]
     doc_text = "".join(read_doc(p, cap) for p in rc.get("docs", []))
+    brief = rc.get("brief", "")
+    brief_text = f"\n\nRoom note: {brief}" if brief else ""
     return (
         f"You hold ONE seat at the '{room}' roundtable. {user_name} is in the room as "
         f"the {user_role} and convenes it; address them directly. Speak only as your "
         f"seat. Your charter:\n\n"
-        f"{charter_text(config, seat)}{doc_text}{workspace_note(config, rc)}\n\n"
+        f"{charter_text(config, seat)}{doc_text}{workspace_note(config, rc)}{brief_text}\n\n"
         "Rules of the room:\n"
         "- Read 'Meeting so far' before answering. Other seats may have already "
         "spoken this round; engage with what they actually said, build on it or "
